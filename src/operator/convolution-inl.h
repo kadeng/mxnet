@@ -17,7 +17,6 @@
 #include <utility>
 #include "./operator_common.h"
 
-
 namespace mxnet {
 namespace op {
 
@@ -79,6 +78,7 @@ class ConvolutionOp : public Operator {
     size_t expected = param_.no_bias ? 2 : 3;
     CHECK_EQ(in_data.size(), expected);
     CHECK_EQ(out_data.size(), 1);
+    DBGLOG("Convolution.Forward P1");
     Stream<xpu> *s = ctx.get_stream<xpu>();
     Tensor<xpu, 4> data = in_data[conv::kData].get<xpu, 4, real_t>(s);
     Shape<3> wmat_shape =
@@ -96,6 +96,7 @@ class ConvolutionOp : public Operator {
         Shape1(this->InitTemp(data.shape_, out.shape_)), s);
     for (index_t i = 0; i < nbatch; i += nstep_) {
       const index_t step = std::min(nstep_, nbatch - i);
+
       Tensor<xpu, 2> temp_col = Tensor<xpu, 2>(workspace.dptr_,
                                                Shape2(shape_colunit_[0],
                                                       shape_colunit_[1] * step), s);
@@ -103,7 +104,10 @@ class ConvolutionOp : public Operator {
                                                Shape3(shape_dstunit_[0],
                                                       shape_dstunit_[1],
                                                       shape_dstunit_[2] * step), s);
+      DBGLOG("Batch Step " << step << " nstep=" << nstep_ << " nbatch=" << nbatch);
+      DBGLOG("Temp Col Shape=" << temp_col.shape_[0] << "," << temp_col.shape_[1]);
       if (param_.pad[0] == 0 && param_.pad[1] == 0) {
+    	DBGLOG("P1 - Zero Padding");
         temp_col = unpack_patch2col(data.Slice(i, i + step),
                                     param_.kernel[0],
                                     param_.kernel[1],
@@ -112,6 +116,7 @@ class ConvolutionOp : public Operator {
                                     param_.dilate[0],
                                     param_.dilate[1]);
       } else {
+    	DBGLOG("P2 - Nonzero Padding");
         temp_col = unpack_patch2col(pad(data.Slice(i, i + step),
                                         param_.pad[0], param_.pad[1]),
                                     param_.kernel[0],
@@ -123,6 +128,7 @@ class ConvolutionOp : public Operator {
       }
       const index_t gstride = temp_col.size(0) / param_.num_group;
       for (uint32_t gid = 0; gid < param_.num_group; ++gid) {
+    	DBGLOG("P3 - gid=" << gid);
         mshadow::Tensor<xpu, 2> tmpc = temp_col.Slice(gstride * gid,
                                        gstride * (gid + 1));
         temp_dst[gid] = dot(wmat[gid], tmpc);
@@ -134,6 +140,7 @@ class ConvolutionOp : public Operator {
                                                   out.size(3))));
     }
     if (!param_.no_bias) {
+      DBGLOG("P4 - Add Bias");
       // add bias, broadcast bias to dim 1: channel
       Tensor<xpu, 1> bias = in_data[conv::kBias].get<xpu, 1, real_t>(s);
       out += broadcast<1>(bias, out.shape_);
